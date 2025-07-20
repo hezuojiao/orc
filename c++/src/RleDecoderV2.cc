@@ -119,17 +119,11 @@ namespace orc {
   void RleDecoderV2::skip(uint64_t numValues) {
     // simple for now, until perf tests indicate something encoding specific is
     // needed
-    const uint64_t N = 64;
-    int64_t dummy[N];
-
-    while (numValues) {
-      uint64_t nRead = std::min(N, numValues);
-      next(dummy, nRead, nullptr);
-      numValues -= nRead;
-    }
+    int64_t* dummy = nullptr;
+    next<int64_t, false>(dummy, numValues, nullptr);
   }
 
-  template <typename T>
+  template <typename T, bool needCopyData>
   void RleDecoderV2::next(T* const data, const uint64_t numValues, const char* const notNull) {
     SCOPED_STOPWATCH(metrics, DecodingLatencyUs, DecodingCall);
     uint64_t nRead = 0;
@@ -152,16 +146,16 @@ namespace orc {
       EncodingType enc = static_cast<EncodingType>((firstByte_ >> 6) & 0x03);
       switch (static_cast<int64_t>(enc)) {
         case SHORT_REPEAT:
-          nRead += nextShortRepeats(data, offset, length, notNull);
+          nRead += nextShortRepeats<T, needCopyData>(data, offset, length, notNull);
           break;
         case DIRECT:
-          nRead += nextDirect(data, offset, length, notNull);
+          nRead += nextDirect<T, needCopyData>(data, offset, length, notNull);
           break;
         case PATCHED_BASE:
-          nRead += nextPatched(data, offset, length, notNull);
+          nRead += nextPatched<T, needCopyData>(data, offset, length, notNull);
           break;
         case DELTA:
-          nRead += nextDelta(data, offset, length, notNull);
+          nRead += nextDelta<T, needCopyData>(data, offset, length, notNull);
           break;
         default:
           throw ParseError("unknown encoding");
@@ -170,18 +164,18 @@ namespace orc {
   }
 
   void RleDecoderV2::next(int64_t* data, uint64_t numValues, const char* notNull) {
-    next<int64_t>(data, numValues, notNull);
+    next<int64_t, true>(data, numValues, notNull);
   }
 
   void RleDecoderV2::next(int32_t* data, uint64_t numValues, const char* notNull) {
-    next<int32_t>(data, numValues, notNull);
+    next<int32_t, true>(data, numValues, notNull);
   }
 
   void RleDecoderV2::next(int16_t* data, uint64_t numValues, const char* notNull) {
-    next<int16_t>(data, numValues, notNull);
+    next<int16_t, true>(data, numValues, notNull);
   }
 
-  template <typename T>
+  template <typename T, bool needCopyData>
   uint64_t RleDecoderV2::nextShortRepeats(T* const data, uint64_t offset, uint64_t numValues,
                                           const char* const notNull) {
     if (runRead_ == runLength_) {
@@ -203,25 +197,29 @@ namespace orc {
     }
 
     uint64_t nRead = std::min(runLength_ - runRead_, numValues);
-
-    if (notNull) {
-      for (uint64_t pos = offset; pos < offset + nRead; ++pos) {
-        if (notNull[pos]) {
+    if (needCopyData) {
+      if (notNull) {
+        for (uint64_t pos = offset; pos < offset + nRead; ++pos) {
+          if (notNull[pos]) {
+            data[pos] = static_cast<T>(literals_[0]);
+            ++runRead_;
+          }
+        }
+      } else {
+        for (uint64_t pos = offset; pos < offset + nRead; ++pos) {
           data[pos] = static_cast<T>(literals_[0]);
           ++runRead_;
         }
       }
     } else {
-      for (uint64_t pos = offset; pos < offset + nRead; ++pos) {
-        data[pos] = static_cast<T>(literals_[0]);
-        ++runRead_;
-      }
+      // if we don't need to copy data, just increment the runRead_ counter
+      runRead_ += nRead;
     }
 
     return nRead;
   }
 
-  template <typename T>
+  template <typename T, bool needCopyData>
   uint64_t RleDecoderV2::nextDirect(T* const data, uint64_t offset, uint64_t numValues,
                                     const char* const notNull) {
     if (runRead_ == runLength_) {
@@ -243,8 +241,14 @@ namespace orc {
         }
       }
     }
-
-    return copyDataFromBuffer(data, offset, numValues, notNull);
+    uint64_t nRead = 0;
+    if (needCopyData) {
+      nRead = copyDataFromBuffer(data, offset, numValues, notNull);
+    } else {
+      nRead = std::min(runLength_ - runRead_, numValues);
+      runRead_ += nRead;
+    }
+    return nRead;
   }
 
   void RleDecoderV2::adjustGapAndPatch(uint32_t patchBitSize, int64_t patchMask, int64_t* resGap,
@@ -270,7 +274,7 @@ namespace orc {
     *patchIdx = idx;
   }
 
-  template <typename T>
+  template <typename T, bool needCopyData>
   uint64_t RleDecoderV2::nextPatched(T* const data, uint64_t offset, uint64_t numValues,
                                      const char* const notNull) {
     if (runRead_ == runLength_) {
@@ -366,10 +370,17 @@ namespace orc {
       }
     }
 
-    return copyDataFromBuffer(data, offset, numValues, notNull);
+    uint64_t nRead = 0;
+    if (needCopyData) {
+      nRead = copyDataFromBuffer(data, offset, numValues, notNull);
+    } else {
+      nRead = std::min(runLength_ - runRead_, numValues);
+      runRead_ += nRead;
+    }
+    return nRead;
   }
 
-  template <typename T>
+  template <typename T, bool needCopyData>
   uint64_t RleDecoderV2::nextDelta(T* const data, uint64_t offset, uint64_t numValues,
                                    const char* const notNull) {
     if (runRead_ == runLength_) {
@@ -431,7 +442,14 @@ namespace orc {
       }
     }
 
-    return copyDataFromBuffer(data, offset, numValues, notNull);
+    uint64_t nRead = 0;
+    if (needCopyData) {
+      nRead = copyDataFromBuffer(data, offset, numValues, notNull);
+    } else {
+      nRead = std::min(runLength_ - runRead_, numValues);
+      runRead_ += nRead;
+    }
+    return nRead;
   }
 
   template <typename T>

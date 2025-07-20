@@ -159,7 +159,7 @@ namespace orc {
     /**
      * Read a number of values into the batch.
      */
-    template <typename T>
+    template <typename T, bool needCopyData>
     void next(T* data, uint64_t numValues, const char* notNull);
 
     void next(int64_t* data, uint64_t numValues, const char* notNull) override;
@@ -240,13 +240,13 @@ namespace orc {
     uint64_t readVulong();
     void readLongs(int64_t* data, uint64_t offset, uint64_t len, uint64_t fbs);
 
-    template <typename T>
+    template <typename T, bool needCopyData>
     uint64_t nextShortRepeats(T* data, uint64_t offset, uint64_t numValues, const char* notNull);
-    template <typename T>
+    template <typename T, bool needCopyData>
     uint64_t nextDirect(T* data, uint64_t offset, uint64_t numValues, const char* notNull);
-    template <typename T>
+    template <typename T, bool needCopyData>
     uint64_t nextPatched(T* data, uint64_t offset, uint64_t numValues, const char* notNull);
-    template <typename T>
+    template <typename T, bool needCopyData>
     uint64_t nextDelta(T* data, uint64_t offset, uint64_t numValues, const char* notNull);
     template <typename T>
     uint64_t copyDataFromBuffer(T* data, uint64_t offset, uint64_t numValues, const char* notNull);
